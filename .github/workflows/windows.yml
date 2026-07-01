@@ -1,0 +1,37 @@
+name: windows-build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Scope to the peeky crate. The console (Tauri) needs an icon.ico
+      # we don't have committed yet; until it does, including it here
+      # breaks the windows build.
+      - name: Type-check peeky (default = winit on Windows)
+        run: cargo check -p peeky --all-targets
+
+      - name: Build peeky (main bin)
+        run: cargo build -p peeky --bin peeky
+
+      - name: Build cross-platform demo_win
+        run: cargo build -p peeky-demos --no-default-features --features crossplatform --bin demo_win
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: peeky-windows
+          path: |
+            target/debug/peeky.exe
+            target/debug/demo_win.exe

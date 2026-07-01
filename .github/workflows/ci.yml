@@ -1,0 +1,139 @@
+# Fast feedback on every push to main and every PR.
+#
+# Jobs:
+#   - lint:        rustfmt + clippy on stable. Required gate.
+#   - build:       type-check + test across a Rust matrix (stable, beta, MSRV).
+#                  Only the stable cell gates merging; beta and MSRV are
+#                  advisory so future toolchain regressions surface early
+#                  without blocking work.
+#   - console-js: vitest suite for the onboarding screen (onboarding.js).
+#
+# Companion workflows:
+#   - linux.yml builds a release binary for Linux winit-window
+#   - windows.yml builds release binaries for Windows
+#   - release.yml ships signed artifacts on tag push
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_TEST_DEBUG: "0"
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev \
+            libpipewire-0.3-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            libgbm-dev \
+            libegl-dev \
+            libxcb1-dev \
+            libxcb-shm0-dev \
+            libxcb-render0-dev \
+            libxcb-randr0-dev \
+            libxcb-xfixes0-dev \
+            libxrandr-dev \
+            libxss-dev \
+            pkg-config
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: lint
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      # --no-default-features drops the `hyprland` feature, so this builds the
+      # winit + portable-crate path (no GTK4/layer-shell C libs needed in CI).
+      - name: Clippy (winit / portable path)
+        run: cargo clippy -p peeky --no-default-features --all-targets -- -D warnings
+
+  build:
+    name: build + test (${{ matrix.rust }})
+    strategy:
+      fail-fast: false
+      matrix:
+        rust: [stable, beta, "1.88"]
+    runs-on: ubuntu-latest
+    # Only the stable cell gates merging. Beta and MSRV are advisory:
+    # they surface upstream changes (new lints, std-lib bumps, dep MSRV
+    # creep) without blocking work on green stable.
+    continue-on-error: ${{ matrix.rust != 'stable' }}
+    steps:
+      # lfs: true pulls the routelet model (embedder.onnx) instead of its
+      # LFS pointer; the routing regression suite loads it at test time.
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev \
+            libpipewire-0.3-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            libgbm-dev \
+            libegl-dev \
+            libxcb1-dev \
+            libxcb-shm0-dev \
+            libxcb-render0-dev \
+            libxcb-randr0-dev \
+            libxcb-xfixes0-dev \
+            libxrandr-dev \
+            libxss-dev \
+            pkg-config
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: build-${{ matrix.rust }}
+
+      - name: Check
+        run: cargo check -p peeky --no-default-features
+
+      - name: Test
+        run: cargo test -p peeky --no-default-features
+
+  console-js:
+    name: console js tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - name: Install + run vitest
+        working-directory: console
+        run: |
+          npm ci
+          npx vitest run

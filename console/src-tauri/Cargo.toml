@@ -1,0 +1,32 @@
+[package]
+name = "console"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+description = "Peeky console: onboarding, sign-in, and settings GUI"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "5.0"
+reqwest = { version = "0.13", features = ["json"] }
+uuid = { version = "1.23", features = ["v4"] }
+# Open the system browser for the OAuth handoff.
+open = "5"
+# Poll sleep between OAuth session checks + async subprocess for the peeky
+# integrations-status shell-out; tauri's async runtime is tokio.
+tokio = { version = "1", features = ["time", "process"] }
+# Native secret store per OS: Keychain (macOS), Credential Manager (Windows),
+# Secret Service (Linux). sync-secret-service is pure-Rust (zbus), no libsecret.
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+
+# macOS-only: TCC permission prompts (mic, screen recording, accessibility) so
+# onboarding can grant them before the agent spawns. Target-gated, so it is
+# never resolved into or compiled for Linux/Windows builds.
+[target.'cfg(target_os = "macos")'.dependencies]
+tauri-plugin-macos-permissions = "2"

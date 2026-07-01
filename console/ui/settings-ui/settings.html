@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Peeky · Settings</title>
+    <link rel="stylesheet" href="../shared/base.css" />
+    <link rel="stylesheet" href="settings.css" />
+  </head>
+  <body>
+    <div class="window">
+      <div class="card">
+        <div class="sheen" aria-hidden="true"></div>
+
+        <!-- Drag handle. Interactive children (Sign out) must be pointer-events:auto
+             which settings.css handles via .header-right. -->
+        <header class="settings-header" data-tauri-drag-region>
+          <img class="logo" src="../shared/cursor.svg" alt="Peeky" />
+          <h1>Settings</h1>
+          <div class="header-right">
+            <span id="account-email"></span>
+            <button id="signout-btn" type="button">Sign out</button>
+          </div>
+        </header>
+
+        <main class="settings-body">
+
+          <!-- Integrations -->
+          <section class="settings-section" aria-labelledby="integrations-label">
+            <h2 class="section-label" id="integrations-label">Integrations</h2>
+            <p class="section-sub">Connect apps for Peeky. Credentials stay on this device.</p>
+            <ul id="integrations" role="list">
+              <!-- rows injected by settings.js -->
+            </ul>
+          </section>
+
+          <!-- Billing -->
+          <section class="settings-section" aria-labelledby="billing-label">
+            <h2 class="section-label" id="billing-label">Billing</h2>
+            <div class="billing-card">
+              <div class="billing-plan">
+                <span class="billing-plan-label">Current plan</span>
+                <span class="billing-plan-name">Free trial</span>
+              </div>
+              <button class="btn-billing" type="button" id="manage-subscription-btn">
+                Manage subscription
+              </button>
+            </div>
+          </section>
+
+          <!-- Cursor -->
+          <section class="settings-section" aria-labelledby="cursor-label">
+            <h2 class="section-label" id="cursor-label">Cursor</h2>
+            <div class="coming-soon">
+              Cursor and voice settings are coming soon.
+            </div>
+          </section>
+
+        </main>
+      </div>
+    </div>
+
+    <script src="settings.js" defer></script>
+  </body>
+</html>

@@ -1,0 +1,32 @@
+// Wire constants for the Peeky Cloudflare Worker proxy. The header strings
+// are the x-peeky-* literals used throughout proxy/src/index.ts;
+// code_format_valid mirrors CODE_RE in that file. Do not change these values;
+// users have codes and device IDs in flight.
+
+/// Header carrying the per-install UUID device identifier.
+pub const DEVICE_ID_HEADER: &str = "x-peeky-device-id";
+
+/// Header carrying the invite code for demo-tier access.
+pub const INVITE_CODE_HEADER: &str = "x-peeky-invite-code";
+
+/// Dev-only test header. When the proxy has DEV_HEADERS enabled, its presence
+/// makes the proxy return the budget wall with no upstream call, so the client
+/// upgrade flow can be exercised for free. Sent when PEEKY_FORCE_EXHAUSTED is set.
+pub const FORCE_EXHAUSTED_HEADER: &str = "x-peeky-force-exhausted";
+
+/// Returns true if `s` is a plausible invite code format.
+/// Mirrors the proxy's CODE_RE: /^[A-Z0-9][A-Z0-9-]{6,62}[A-Z0-9]$/
+/// The proxy is the source of truth for expiry and device limits.
+pub fn code_format_valid(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if !(8..=64).contains(&bytes.len()) {
+        return false;
+    }
+    let all_valid = bytes
+        .iter()
+        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || *b == b'-');
+    if !all_valid {
+        return false;
+    }
+    bytes.first() != Some(&b'-') && bytes.last() != Some(&b'-')
+}

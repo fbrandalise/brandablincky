@@ -1,0 +1,17 @@
+{
+  "name": "aegis-proxy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloudflare Worker fronting Anthropic for the peeky desktop client.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test:tiers": "bash scripts/test-tiers.sh"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260615.1",
+    "typescript": "^5.6.3",
+    "wrangler": "^4.100.0"
+  }
+}

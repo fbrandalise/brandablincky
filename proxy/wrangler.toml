@@ -1,0 +1,48 @@
+name = "aegis-proxy"
+main = "src/index.ts"
+compatibility_date = "2026-05-15"
+
+[vars]
+# Dev-only: when "1", handlers honor the x-peeky-force-exhausted test header,
+# returning the budget wall with no upstream call so the client upgrade flow can
+# be tested for free. Set to "0" or remove before serving real production users.
+DEV_HEADERS = "1"
+
+# Trial and demo tiers meter against per-UTC-day budgets, not a lifetime turn
+# count. The trial default budget lives in src/constants.ts (TRIAL_DAILY_BUDGET);
+# demo budgets come from each invite record's daily_* fields.
+
+# KV namespace for per-device usage counters. Create with:
+#   wrangler kv namespace create USAGE_KV
+# then paste the returned id below.
+[[kv_namespaces]]
+binding = "USAGE_KV"
+id = "cdfd0f967d61437d8a4833b18899e343"
+
+# R2 bucket for routelet distillation samples. One JSON object per sample,
+# keyed samples/{date}/{deviceId}/{ts}-{uuid}.json. Create with:
+#   wrangler r2 bucket create aegis-routelet-samples
+# Local `wrangler dev` simulates this bucket on disk, no remote bucket needed.
+[[r2_buckets]]
+binding = "ROUTELET_R2"
+bucket_name = "aegis-routelet-samples"
+
+# D1 accounts database (users; later synced settings + subscription tier).
+# Create with:
+#   wrangler d1 create aegis-accounts
+# then paste the returned database_id below. Apply the schema with:
+#   wrangler d1 migrations apply aegis-accounts --local   (local dev)
+#   wrangler d1 migrations apply aegis-accounts --remote   (production)
+[[d1_databases]]
+binding = "DB"
+database_name = "aegis-accounts"
+database_id = "02e5cac9-8d3d-4ab5-95ab-39c2c86cf211"
+migrations_dir = "migrations"
+
+# Secrets (set out-of-band, never committed):
+#   wrangler secret put ANTHROPIC_API_KEY
+#   wrangler secret put DEEPGRAM_API_KEY
+#   wrangler secret put CARTESIA_API_KEY
+#   wrangler secret put GITHUB_CLIENT_ID
+#   wrangler secret put GITHUB_CLIENT_SECRET
+#   wrangler secret put JWT_SECRET

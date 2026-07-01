@@ -1,0 +1,94 @@
+# cargo-deny config. Four checks fire:
+#   advisories: known CVEs in our dep graph (rustsec/advisory-db).
+#   licenses:   keep the graph to permissive, MIT-compatible licenses.
+#   bans:       no wildcards, flag duplicate versions.
+#   sources:    only crates.io and explicitly-listed git deps.
+#
+# Run locally: cargo deny check
+# CI:          .github/workflows/deny.yml
+
+[graph]
+all-features = false
+no-default-features = false
+
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "warn"
+ignore = [
+    # unic-ucd-version 0.9.0 is unmaintained. Pulled in transitively through
+    # tauri -> tauri-utils -> urlpattern -> unic-ucd-ident. No upgrade is
+    # available; clear when tauri drops the unic chain upstream.
+    "RUSTSEC-2025-0098",
+    # gtk-rs GTK3 bindings are unmaintained (the whole atk/gdk/gdk-pixbuf/gtk
+    # batch). Pulled in transitively via global-hotkey (Linux) and the Tauri
+    # console; no maintained replacement exists.
+    "RUSTSEC-2024-0411",
+    "RUSTSEC-2024-0412",
+    "RUSTSEC-2024-0413",
+    "RUSTSEC-2024-0414",
+    "RUSTSEC-2024-0415",
+    "RUSTSEC-2024-0416",
+    "RUSTSEC-2024-0417",
+    "RUSTSEC-2024-0418",
+    "RUSTSEC-2024-0419",
+    "RUSTSEC-2024-0420",
+    # Other transitive unmaintained-crate notices (proc-macro-error via deps,
+    # google-apis-rs via google-gmail1, and assorted transitive crates). All
+    # are "unmaintained" advisories, not vulnerabilities.
+    "RUSTSEC-2024-0370",
+    "RUSTSEC-2024-0436",
+    "RUSTSEC-2025-0066",
+    "RUSTSEC-2025-0075",
+    "RUSTSEC-2025-0080",
+    "RUSTSEC-2025-0081",
+    "RUSTSEC-2025-0100",
+    # time 0.3.41 stack-exhaustion in the parser. Fix is >=0.3.47 but
+    # tract-linalg 0.21.15 hard-pins time = ">=0.3.23, <0.3.42". Exposure is
+    # transitive only: liquid (tract build templating), yup-oauth2 (Google
+    # token expiry), tauri/plist (bundle metadata). No attacker-controlled
+    # input reaches time's parser at runtime. Drop when tract relaxes the pin.
+    "RUSTSEC-2026-0009",
+]
+
+[licenses]
+# Permissive set we're willing to ship. Add deliberately, not reflexively.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "NCSA",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+]
+confidence-threshold = 0.8
+exceptions = [
+    # hyprland-rs (Hyprland IPC) is GPL-3.0-or-later. Scoped here rather than
+    # allowing GPL graph-wide. NOTE: this makes the Linux build GPL-encumbered.
+    { crate = "hyprland", allow = ["GPL-3.0-or-later"] },
+    { crate = "hyprland-macros", allow = ["GPL-3.0-or-later"] },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

@@ -1,0 +1,140 @@
+/* Sign-in window. Light glass card, same visual language as onboarding.css
+   and settings.css and the Peeky_Frontend landing page. base.css is loaded
+   first and provides .window. The card fills the OS window edge to edge, so
+   only its rounded corners show the desktop through. */
+
+.window {
+  background: transparent;
+  align-items: center;
+  justify-content: center;
+}
+
+.card {
+  /* shared card (gradient, radius, sheen) lives in base.css; sign-in centers
+     its content and is draggable */
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+}
+
+/* ---- centered sign-in content ---- */
+
+.signin-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  width: 280px;
+}
+
+.signin-logo {
+  width: 56px;
+  height: 56px;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.signin-title {
+  margin: 18px 0 0;
+  font-size: 24px;
+  font-weight: 600;
+  color: #1a1a1e;
+}
+
+.signin-sub {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #5c616b;
+}
+
+/* ---- GitHub button: dark neutral on the light card ---- */
+
+.btn-github {
+  margin-top: 22px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: #1a1a1e;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 11px 0;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background 120ms ease, opacity 120ms ease;
+}
+
+.btn-github:hover {
+  background: #2c2c32;
+}
+
+.btn-github:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn-github-icon {
+  width: 18px;
+  height: 18px;
+  /* the mark ships black; invert to white for the dark button */
+  filter: invert(1);
+  pointer-events: none;
+}
+
+.signin-status {
+  margin: 12px 0 0;
+  min-height: 16px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: #8e8e93;
+}
+
+/* ---- signed-in state (returning user, before redirect to settings) ---- */
+
+.signed-in {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.signed-in-text {
+  margin: 0;
+  font-size: 13px;
+  color: #5c616b;
+}
+
+.signed-in-text span {
+  font-weight: 600;
+  color: #1a1a1e;
+}
+
+.signout-link {
+  background: none;
+  border: none;
+  padding: 2px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fd8a02;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: color 120ms ease;
+}
+
+.signout-link:hover {
+  color: #ffa01f;
+}
+
+/* JS toggles this in place of Tailwind's hidden utility */
+.hidden {
+  display: none !important;
+}

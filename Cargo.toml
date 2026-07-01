@@ -1,0 +1,10 @@
+[workspace]
+members = ["peeky", "demos", "console/src-tauri"]
+resolver = "2"
+
+# Shared profile tweaks live here so both crates compile the same way. Per-crate
+# dependencies stay in each crate's Cargo.toml until something is genuinely
+# shared, at which point we'd promote it to [workspace.dependencies].
+[profile.release]
+lto = "thin"
+codegen-units = 1

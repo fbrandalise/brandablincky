@@ -1,0 +1,56 @@
+name: linux-build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install system dependencies
+        # crossplatform feature still pulls in GTK3 on Linux via global-hotkey,
+        # plus xcb/randr/X11 deps for xcap screenshots. libgtk-3-dev provides
+        # gdk-3.0 + glib + gobject; libasound for cpal; libxkbcommon/libwayland
+        # for winit.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev \
+            libpipewire-0.3-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            libgbm-dev \
+            libegl-dev \
+            libxcb1-dev \
+            libxcb-shm0-dev \
+            libxcb-render0-dev \
+            libxcb-randr0-dev \
+            libxcb-xfixes0-dev \
+            libxrandr-dev \
+            libxss-dev \
+            pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Limit to the peeky package; the console pulls webkit2gtk and isn't
+      # worth testing here. The memex tool is also out of scope.
+      - name: Type-check peeky (winit / portable path)
+        run: cargo check -p peeky --no-default-features
+
+      - name: Build peeky bin (winit / portable path)
+        run: cargo build -p peeky --no-default-features --bin peeky
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: peeky-linux
+          path: target/debug/peeky
