@@ -8,51 +8,24 @@ use super::backend::ScreenshotBackend;
 /// Logs the monitor geometry diagnostic at most once per process.
 static GEOMETRY_DIAG: Once = Once::new();
 
-/// Cross-platform backend (Windows, macOS, X11) via the `xcap` crate.
+/// Cross-platform backend (Windows, macOS, Linux). On Linux, tries xcap first
+/// (Wayland via wayshot, or X11 via xcb), falling back to a dedicated X11
+/// path when xcap's Wayland detection triggers but the compositor doesn't
+/// support the wayshot protocol.
 /// Zero-sized; never instantiated.
 pub struct Backend;
 
 impl ScreenshotBackend for Backend {
-    /// Geometry of the primary monitor. There is no consistent "active
-    /// workspace" concept across Mac/Windows/Linux, so we use the primary.
+    /// Geometry of the primary monitor.
     fn active_workspace_geometry()
     -> Result<(i32, i32, u32, u32), Box<dyn std::error::Error + Send + Sync>> {
-        let monitors = ::xcap::Monitor::all()?;
-        let monitor = monitors
-            .into_iter()
-            .find(|m| m.is_primary().unwrap_or(false))
-            .ok_or("no primary monitor")?;
-        let geo = (
-            monitor.x()?,
-            monitor.y()?,
-            monitor.width()?,
-            monitor.height()?,
-        );
-
-        // DIAGNOSTIC (once per process): find_action maps Claude's coordinates
-        // into these w/h units, then clicks via CGEvent, which uses logical
-        // points on macOS. So these must be logical. If `w`/`h` come back as the
-        // physical (Retina-doubled) resolution, find_action clicks land ~2x off
-        // and the mapping needs dividing by scale_factor. On a Retina Mac: if w
-        // ≈ your logical width it's correct; if ≈ 2x it's physical.
-        GEOMETRY_DIAG.call_once(|| {
-            let sf = monitor.scale_factor().unwrap_or(1.0);
-            let (_, _, w, h) = geo;
-            eprintln!(
-                "[diag:geometry] xcap primary monitor: pos=({}, {}) size={}x{} \
-                 scale_factor={:.2} → physical would be {}x{}. \
-                 Clicks use logical points; size above must be logical.",
-                geo.0,
-                geo.1,
-                w,
-                h,
-                sf,
-                (w as f32 * sf) as u32,
-                (h as f32 * sf) as u32,
-            );
-        });
-
-        Ok(geo)
+        if let Ok(geo) = xcap_geometry() {
+            return Ok(geo);
+        }
+        #[cfg(target_os = "linux")]
+        return super::x11::Backend::active_workspace_geometry();
+        #[cfg(not(target_os = "linux"))]
+        Err("no monitors found".into())
     }
 
     fn capture_resized_for_claude(
@@ -63,46 +36,105 @@ impl ScreenshotBackend for Backend {
         target_w: u32,
         target_h: u32,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        use fast_image_resize::images::Image as FirImage;
-        use fast_image_resize::{
-            FilterType as FirFilterType, PixelType, ResizeAlg, ResizeOptions, Resizer,
-        };
-
-        let monitor = ::xcap::Monitor::from_point(x, y)?;
-        let local_x = (x - monitor.x()?).max(0) as u32;
-        let local_y = (y - monitor.y()?).max(0) as u32;
-        let image = monitor.capture_region(local_x, local_y, width as u32, height as u32)?;
-
-        // On macOS Retina displays, capture_region returns physical pixels even
-        // though we pass logical points. Use the actual image dimensions for
-        // resize so the coordinate mapping stays correct.
-        let src_w = image.width();
-        let src_h = image.height();
-
-        // xcap gives us an RGBA buffer directly. Convert to RGB for the resize.
-        let rgba = image.into_raw();
-        let mut rgb: Vec<u8> = Vec::with_capacity((src_w * src_h * 3) as usize);
-        for chunk in rgba.chunks_exact(4) {
-            rgb.push(chunk[0]);
-            rgb.push(chunk[1]);
-            rgb.push(chunk[2]);
+        if let Ok(result) = xcap_capture(x, y, width, height, target_w, target_h) {
+            return Ok(result);
         }
+        #[cfg(target_os = "linux")]
+        return super::x11::Backend::capture_resized_for_claude(
+            x, y, width, height, target_w, target_h,
+        );
+        #[cfg(not(target_os = "linux"))]
+        Err("screenshot capture failed".into())
+    }
+}
 
-        let fir_src = FirImage::from_vec_u8(src_w, src_h, rgb, PixelType::U8x3)?;
-        let mut fir_dst = FirImage::new(target_w, target_h, PixelType::U8x3);
-        let opts = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FirFilterType::Bilinear));
-        let mut resizer = Resizer::new();
-        resizer.resize(&fir_src, &mut fir_dst, &opts)?;
+// ── xcap path (Wayland or X11 via xcb) ─────────────────────────────────────
 
-        let mut out: Vec<u8> = Vec::new();
-        JpegEncoder::new_with_quality(&mut out, 85).encode(
+fn xcap_geometry() -> Result<(i32, i32, u32, u32), String> {
+    let monitors = ::xcap::Monitor::all().map_err(|e| e.to_string())?;
+    let monitor = monitors
+        .into_iter()
+        .find(|m| m.is_primary().unwrap_or(false))
+        .ok_or("no primary monitor".to_string())?;
+    let geo = (
+        monitor.x().map_err(|e| e.to_string())?,
+        monitor.y().map_err(|e| e.to_string())?,
+        monitor.width().map_err(|e| e.to_string())?,
+        monitor.height().map_err(|e| e.to_string())?,
+    );
+
+    // DIAGNOSTIC (once per process): find_action maps Claude's coordinates
+    // into these w/h units.
+    GEOMETRY_DIAG.call_once(|| {
+        let sf = monitor.scale_factor().unwrap_or(1.0);
+        let (_, _, w, h) = geo;
+        eprintln!(
+            "[diag:geometry] xcap primary monitor: pos=({}, {}) size={}x{} \
+             scale_factor={:.2} → physical would be {}x{}. \
+             Clicks use logical points; size above must be logical.",
+            geo.0,
+            geo.1,
+            w,
+            h,
+            sf,
+            (w as f32 * sf) as u32,
+            (h as f32 * sf) as u32,
+        );
+    });
+
+    Ok(geo)
+}
+
+fn xcap_capture(
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    target_w: u32,
+    target_h: u32,
+) -> Result<String, String> {
+    use fast_image_resize::images::Image as FirImage;
+    use fast_image_resize::{
+        FilterType as FirFilterType, PixelType, ResizeAlg, ResizeOptions, Resizer,
+    };
+
+    let monitor = ::xcap::Monitor::from_point(x, y).map_err(|e| e.to_string())?;
+    let local_x = (x - monitor.x().map_err(|e| e.to_string())?).max(0) as u32;
+    let local_y = (y - monitor.y().map_err(|e| e.to_string())?).max(0) as u32;
+    let image = monitor
+        .capture_region(local_x, local_y, width as u32, height as u32)
+        .map_err(|e| e.to_string())?;
+
+    let src_w = image.width();
+    let src_h = image.height();
+
+    let rgba = image.into_raw();
+    let mut rgb: Vec<u8> = Vec::with_capacity((src_w * src_h * 3) as usize);
+    for chunk in rgba.chunks_exact(4) {
+        rgb.push(chunk[0]);
+        rgb.push(chunk[1]);
+        rgb.push(chunk[2]);
+    }
+
+    let fir_src =
+        FirImage::from_vec_u8(src_w, src_h, rgb, PixelType::U8x3).map_err(|e| e.to_string())?;
+    let mut fir_dst = FirImage::new(target_w, target_h, PixelType::U8x3);
+    let opts = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FirFilterType::Bilinear));
+    let mut resizer = Resizer::new();
+    resizer
+        .resize(&fir_src, &mut fir_dst, &opts)
+        .map_err(|e| e.to_string())?;
+
+    let mut out: Vec<u8> = Vec::new();
+    JpegEncoder::new_with_quality(&mut out, 85)
+        .encode(
             fir_dst.buffer(),
             target_w,
             target_h,
             image::ExtendedColorType::Rgb8,
-        )?;
-        Ok(BASE64.encode(&out))
-    }
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(BASE64.encode(&out))
 }
 
 impl Backend {

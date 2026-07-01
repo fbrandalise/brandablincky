@@ -5392,6 +5392,7 @@ dependencies = [
  "uuid",
  "wgpu",
  "winit",
+ "x11",
  "xcap",
  "yup-oauth2",
 ]
