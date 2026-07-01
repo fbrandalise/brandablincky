@@ -20,10 +20,23 @@ use super::backend::HotkeyBackend;
 static RECORDING: AtomicBool = AtomicBool::new(false);
 static ON_PRESS: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
 static ON_RELEASE: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+static ON_ANALYZE_PRESS: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+static ON_RECALIBRATE_PRESS: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
 
 /// The push-to-talk key. Matches the Hyprland config and the crossplatform
 /// backend's non-macOS default (plain Insert).
 const HOTKEY: KeyCode = KeyCode::KEY_INSERT;
+
+/// One-shot region-analysis trigger: crop the screen under the mouse, ask
+/// Claude to describe it, show the result in an on-screen bubble.
+const ANALYZE_KEY: KeyCode = KeyCode::KEY_LEFTALT;
+
+/// Manual mouse-tracking recalibration: move the real mouse to the screen's
+/// top-left corner, then press this, to re-anchor the evdev-integrated
+/// position tracker. See `mouse_position/evdev.rs`'s module docs for why
+/// this can't be automatic (no reliable way to query real cursor position
+/// on this compositor).
+const RECALIBRATE_KEY: KeyCode = KeyCode::KEY_HOME;
 
 /// Evdev signal backend. Zero-sized; never instantiated.
 pub struct Backend;
@@ -76,6 +89,20 @@ impl HotkeyBackend for Backend {
     fn on_release(f: Box<dyn Fn() + Send + Sync + 'static>) {
         let _ = ON_RELEASE.set(f);
     }
+
+    /// Registers a callback fired immediately after an Alt press. Call
+    /// before `init()`. At most one per process; later registrations are
+    /// ignored.
+    fn on_analyze_press(f: Box<dyn Fn() + Send + Sync + 'static>) {
+        let _ = ON_ANALYZE_PRESS.set(f);
+    }
+
+    /// Registers a callback fired immediately after a Home press. Call
+    /// before `init()`. At most one per process; later registrations are
+    /// ignored.
+    fn on_recalibrate_press(f: Box<dyn Fn() + Send + Sync + 'static>) {
+        let _ = ON_RECALIBRATE_PRESS.set(f);
+    }
 }
 
 /// Devices that can report the hotkey and look like a real keyboard. Excludes
@@ -113,25 +140,34 @@ fn spawn_listener(mut device: Device) {
                 let EventSummary::Key(_, code, value) = event.destructure() else {
                     continue;
                 };
-                if code != HOTKEY {
-                    continue;
-                }
-                match value {
-                    1 => {
-                        eprintln!("[hotkey] press");
-                        RECORDING.store(true, Ordering::Relaxed);
-                        if let Some(f) = ON_PRESS.get() {
-                            f();
+                if code == HOTKEY {
+                    match value {
+                        1 => {
+                            eprintln!("[hotkey] press");
+                            RECORDING.store(true, Ordering::Relaxed);
+                            if let Some(f) = ON_PRESS.get() {
+                                f();
+                            }
                         }
-                    }
-                    0 => {
-                        eprintln!("[hotkey] release");
-                        RECORDING.store(false, Ordering::Relaxed);
-                        if let Some(f) = ON_RELEASE.get() {
-                            f();
+                        0 => {
+                            eprintln!("[hotkey] release");
+                            RECORDING.store(false, Ordering::Relaxed);
+                            if let Some(f) = ON_RELEASE.get() {
+                                f();
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
+                } else if code == ANALYZE_KEY && value == 1 {
+                    eprintln!("[hotkey] analyze press");
+                    if let Some(f) = ON_ANALYZE_PRESS.get() {
+                        f();
+                    }
+                } else if code == RECALIBRATE_KEY && value == 1 {
+                    eprintln!("[hotkey] recalibrate press");
+                    if let Some(f) = ON_RECALIBRATE_PRESS.get() {
+                        f();
+                    }
                 }
             }
         }

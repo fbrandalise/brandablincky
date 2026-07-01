@@ -12,20 +12,33 @@ pub struct Backend;
 
 impl InputInjector for Backend {
     fn exec_click(x: i64, y: i64) {
-        match run_ydotool(&[
-            "mousemove",
-            "--absolute",
-            "-x",
-            &x.to_string(),
-            "-y",
-            &y.to_string(),
-        ]) {
+        // ydotoold's virtual pointer is a plain relative device (confirmed
+        // via `libinput list-devices`: no real absolute axis), so
+        // `mousemove --absolute` is emulated by ydotool itself and lands in
+        // the wrong place. Compute the relative delta from peeky's own
+        // tracked position instead — that's what this device actually
+        // understands.
+        let (cur_x, cur_y) = match crate::mouse_position::mouse_movement() {
+            Ok(pos) => pos,
+            Err(e) => {
+                eprintln!("[action:click] mouse position query failed: {}", e);
+                return;
+            }
+        };
+        let (dx, dy) = (x - cur_x, y - cur_y);
+        match run_ydotool(&["mousemove", "-x", &dx.to_string(), "-y", &dy.to_string()]) {
             Ok(()) => {}
             Err(e) => {
                 eprintln!("[action:click] mousemove failed: {}", e);
                 return;
             }
         }
+        // Tell the tracker where we actually just put the cursor: ydotoold's
+        // virtual device is deliberately excluded from what the evdev
+        // mouse-position backend listens to, so without this every
+        // synthetic click would drift its tracked position further from
+        // reality.
+        crate::mouse_position::report_synthetic_move(x, y);
         // Above the ~10ms pointer-debounce floor so the click registers at
         // the new position, not the previous one.
         thread::sleep(Duration::from_millis(30));

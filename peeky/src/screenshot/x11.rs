@@ -15,18 +15,21 @@ impl ScreenshotBackend for Backend {
     -> Result<(i32, i32, u32, u32), Box<dyn std::error::Error + Send + Sync>> {
         let display = open_display()?;
         let screen = 0;
-        let monitors = list_monitors(display, screen)?;
-        close_display(display);
+        let root = unsafe { x11::xlib::XDefaultRootWindow(display) };
+        let monitors = list_monitors(display, root)?;
 
         if monitors.is_empty() {
             // Fallback: use display dimensions.
             let width = unsafe { x11::xlib::XDisplayWidth(display, screen) };
             let height = unsafe { x11::xlib::XDisplayHeight(display, screen) };
+            unsafe { close_display(display) };
             return Ok((0, 0, width as u32, height as u32));
         }
 
         let m = &monitors[0];
-        Ok((m.x, m.y, m.width, m.height))
+        let geo = (m.x, m.y, m.width, m.height);
+        unsafe { close_display(display) };
+        Ok(geo)
     }
 
     fn capture_resized_for_claude(
@@ -38,9 +41,9 @@ impl ScreenshotBackend for Backend {
         target_h: u32,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+        use fast_image_resize::images::Image as FirImage;
         use fast_image_resize::{
-            FilterType as FirFilterType, Image as FirImage, PixelType, ResizeAlg, ResizeOptions,
-            Resizer,
+            FilterType as FirFilterType, PixelType, ResizeAlg, ResizeOptions, Resizer,
         };
         use image::codecs::jpeg::JpegEncoder;
 
@@ -48,34 +51,36 @@ impl ScreenshotBackend for Backend {
         let root = unsafe { x11::xlib::XDefaultRootWindow(display) };
         let screen = 0;
 
-        let screen_ptr = unsafe { x11::xlib::XDefaultScreenOfDisplay(display) };
-        let root_depth = unsafe { (*screen_ptr).root_depth };
-
         let full_width = unsafe { x11::xlib::XDisplayWidth(display, screen) };
         let full_height = unsafe { x11::xlib::XDisplayHeight(display, screen) };
 
-        // Capture full root window.
+        // Capture full root window; the resulting image is always at origin (0, 0).
         let ximage = xget_image(display, root, 0, 0, full_width as u32, full_height as u32)?;
-        let img_w = ximage.width;
-        let img_h = ximage.height;
-        let data_ptr = ximage.data as *const u8;
-        let bpp = ximage.bits_per_pixel as u32;
+        // SAFETY: xget_image returned a non-null XImage*; we own it until XDestroyImage.
+        let (img_w, img_h, data_ptr, bpp) = unsafe {
+            (
+                (*ximage).width,
+                (*ximage).height,
+                (*ximage).data as *const u8,
+                (*ximage).bits_per_pixel as u32,
+            )
+        };
 
         let mut raw_data = vec![0u8; (img_w * img_h * 4) as usize];
         unsafe {
-            let src = std::slice::from_raw_parts(data_ptr, (img_w * img_h * (bpp / 8)) as usize);
-            convert_ximage_to_rgba(src, bpp, &mut raw_data, img_w, img_h);
+            let src = std::slice::from_raw_parts(data_ptr, (img_w * img_h * (bpp / 8) as i32) as usize);
+            convert_ximage_to_rgba(src, bpp, &mut raw_data, img_w as u32, img_h as u32);
         }
 
-        // Crop to requested region (relative to monitor origin).
-        let crop_x = (x - ximage.x).max(0).min(img_w);
-        let crop_y = (y - ximage.y).max(0).min(img_h);
-        let region_w = width.max(1).min(img_w - crop_x as i32) as u32;
-        let region_h = height.max(1).min(img_h - crop_y as i32) as u32;
+        // Crop to requested region (relative to the root window origin).
+        let crop_x = x.max(0).min(img_w);
+        let crop_y = y.max(0).min(img_h);
+        let region_w = width.max(1).min(img_w - crop_x) as u32;
+        let region_h = height.max(1).min(img_h - crop_y) as u32;
 
         // Extract region RGB.
         let mut region_rgb = Vec::with_capacity(region_w as usize * region_h as usize * 3);
-        for py in crop_y..crop_y + region_h {
+        for py in crop_y..crop_y + region_h as i32 {
             let row_start = ((py * img_w + crop_x) * 4) as usize;
             for px in 0..region_w {
                 let offset = (px * 4) as usize;
@@ -86,8 +91,10 @@ impl ScreenshotBackend for Backend {
         }
 
         // Free ximage and close display.
-        unsafe { x11::xlib::XDestroyImage(ximage) };
-        close_display(display);
+        unsafe {
+            x11::xlib::XDestroyImage(ximage);
+            close_display(display);
+        }
 
         // Resize and encode.
         let fir_src = FirImage::from_vec_u8(region_w, region_h, region_rgb, PixelType::U8x3)
@@ -127,7 +134,7 @@ fn open_display() -> Result<*mut XDisplay, String> {
 
 /// Close the X display.
 unsafe fn close_display(display: *mut XDisplay) {
-    x11::xlib::XCloseDisplay(display);
+    unsafe { x11::xlib::XCloseDisplay(display) };
 }
 
 /// XGetImage wrapper.
@@ -147,7 +154,7 @@ fn xget_image(
             y,
             width,
             height,
-            !0u32,
+            !0u64,
             x11::xlib::ZPixmap,
         )
     };
@@ -222,25 +229,25 @@ struct Monitor {
 }
 
 /// Query Xrandr for monitor layout.
-fn list_monitors(display: *mut XDisplay, screen: i32) -> Result<Vec<Monitor>, String> {
-    // SAFETY: display is a valid Xlib Display pointer.
-    let monitors_ptr = unsafe { x11::xrandr::XRRGetMonitors(display, screen, 1) };
-    if monitors_ptr.is_null() {
+fn list_monitors(display: *mut XDisplay, root: x11::xlib::Window) -> Result<Vec<Monitor>, String> {
+    let mut nmonitors: i32 = 0;
+    // SAFETY: display is a valid Xlib Display pointer; nmonitors is a valid out-param.
+    let monitors_ptr =
+        unsafe { x11::xrandr::XRRGetMonitors(display, root, 1, &mut nmonitors) };
+    if monitors_ptr.is_null() || nmonitors <= 0 {
         return Ok(Vec::new());
     }
 
-    // SAFETY: XRRGetMonitors returns a pointer we own; XRRFreeMonitors frees it.
-    let monitors = unsafe { *monitors_ptr };
-
-    let mut result = Vec::with_capacity(monitors.nmonitors as usize);
-    for i in 0..monitors.nmonitors {
-        let mon = unsafe { *monitors.monitors.add(i as usize) };
+    let mut result = Vec::with_capacity(nmonitors as usize);
+    for i in 0..nmonitors {
+        // SAFETY: XRRGetMonitors returns an array of nmonitors XRRMonitorInfo we own.
+        let mon = unsafe { *monitors_ptr.add(i as usize) };
         result.push(Monitor {
             x: mon.x,
             y: mon.y,
-            width: mon.width,
-            height: mon.height,
-            primary: mon.primary,
+            width: mon.width as u32,
+            height: mon.height as u32,
+            primary: mon.primary != 0,
         });
     }
 

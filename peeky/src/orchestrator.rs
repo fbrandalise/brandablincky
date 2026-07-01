@@ -29,6 +29,73 @@ fn set_cursor_idle() {
     crate::ai_cursor::set_state(crate::ai_cursor::CursorState::Idle);
 }
 
+/// Home-hotkey callback: re-anchors the evdev-integrated mouse tracker to
+/// the screen's top-left corner. There's no reliable way to query the real
+/// cursor position on this compositor (X11 goes stale off XWayland surfaces;
+/// PipeWire's cursor metadata isn't reachable through the `pipewire` crate's
+/// safe API), so the tracker's starting position is a guess that can be off
+/// by most of the screen. The user physically moves the mouse to that
+/// corner first, then presses Home to tell the tracker where it actually is.
+fn recalibrate_mouse_tracking() {
+    let (sx, sy, _, _) = screenshot::active_workspace_geometry().unwrap_or((0, 0, 1920, 1080));
+    crate::mouse_position::report_synthetic_move(sx as i64, sy as i64);
+    eprintln!("[recalibrate] mouse tracker re-anchored to top-left ({sx}, {sy})");
+}
+
+/// Alt-hotkey callback body: crop the screen under the mouse, ask Claude to
+/// describe it, show the result in an on-screen bubble. Runs synchronously
+/// on evdev's listener thread (see the registration in `run_loop`), so the
+/// screenshot capture and the blocking Claude call are both safe to run
+/// inline here.
+fn analyze_region_under_mouse(claude: &Claude, rt_handle: &tokio::runtime::Handle) {
+    ai_cursor::set_state(ai_cursor::CursorState::Loading);
+    let result = analyze_region_inner(claude, rt_handle);
+    set_cursor_idle();
+    match result {
+        Ok((x, y, text)) => {
+            eprintln!("[analyze] {text}");
+            ai_cursor::describe_at(x, y, text);
+        }
+        Err(e) => eprintln!("[analyze] {e}"),
+    }
+}
+
+/// Does the actual crop + describe work; the caller wraps this with the
+/// Loading/Idle cursor-state transitions so it stays visible regardless of
+/// which step succeeds or fails.
+fn analyze_region_inner(
+    claude: &Claude,
+    rt_handle: &tokio::runtime::Handle,
+) -> Result<(i32, i32, String), String> {
+    use crate::tuning::{ANALYZE_REGION_HEIGHT, ANALYZE_REGION_WIDTH};
+
+    let (mx, my) = crate::mouse_position::mouse_movement()
+        .map_err(|e| format!("mouse position query failed: {e}"))?;
+
+    let (sx, sy, sw, sh) =
+        screenshot::active_workspace_geometry().unwrap_or((0, 0, 1920, 1080));
+    let region_w = ANALYZE_REGION_WIDTH as i32;
+    let region_h = ANALYZE_REGION_HEIGHT as i32;
+    let x = (mx as i32 - region_w / 2).clamp(sx, (sx + sw as i32 - region_w).max(sx));
+    let y = (my as i32 - region_h / 2).clamp(sy, (sy + sh as i32 - region_h).max(sy));
+
+    let image_b64 = screenshot::capture_resized_for_claude(
+        x,
+        y,
+        region_w,
+        region_h,
+        ANALYZE_REGION_WIDTH,
+        ANALYZE_REGION_HEIGHT,
+    )
+    .map_err(|e| format!("screenshot capture failed: {e}"))?;
+
+    let text = rt_handle
+        .block_on(claude.describe_region(&image_b64))
+        .map_err(|e| format!("describe_region failed: {e}"))?;
+
+    Ok((mx as i32, my as i32, text))
+}
+
 pub fn run_loop(
     mic: audio::Mic,
     stt: SttDeepgram,
@@ -38,10 +105,25 @@ pub fn run_loop(
 ) {
     let session = VoiceSession::start(mic, stt, claude, cartesia, routelet);
 
+    // Alt-hotkey region analysis. The callback runs on evdev's own listener
+    // thread (see hotkey/evdev.rs), never entered into the tokio runtime, so
+    // `rt_handle.block_on(...)` here is safe for the same reason the fixed
+    // screenshot-in-agent-loop panic was: no nested-runtime nesting, because
+    // this thread was never inside one to begin with.
+    {
+        let claude = session.claude.clone();
+        let rt_handle = session.rt.handle().clone();
+        hotkey::on_analyze_press(move || analyze_region_under_mouse(&claude, &rt_handle));
+    }
+    hotkey::on_recalibrate_press(recalibrate_mouse_tracking);
+
     #[cfg(target_os = "macos")]
     println!("peeky ready. hold Ctrl+Space to talk");
     #[cfg(not(target_os = "macos"))]
-    println!("peeky ready. hold Insert to talk");
+    println!(
+        "peeky ready. hold Insert to talk. move the mouse to the screen's top-left \
+         corner and press Home if the peeky cursor drifts from the real one."
+    );
     loop {
         hotkey::wait_for_press();
         let press_t = std::time::Instant::now();
@@ -735,13 +817,26 @@ async fn run_agent(
     cancel_claude: &CancellationToken,
     sentence_tx: &tokio::sync::mpsc::UnboundedSender<String>,
 ) -> Option<String> {
+    // Runs the capture on a bare OS thread, not inline on this tokio worker.
+    // xcap's Wayland path opens a D-Bus session via zbus's blocking API,
+    // which spins up its own tokio runtime and calls `.block_on` — fine on a
+    // thread tokio never "entered" (like this one), but a guaranteed panic
+    // ("Cannot start a runtime from within a runtime") if run directly on a
+    // worker thread already driving this process's async tasks, which is
+    // exactly where the agent loop calls `take_screenshot` from between steps.
     let take_screenshot = move || -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let (cx, cy, cw, ch) = screenshot::active_workspace_geometry()
-            .map(|g| (g.0, g.1, g.2 as i32, g.3 as i32))
-            .unwrap_or((x, y, w as i32, h as i32));
-        let (dw, dh) = screenshot::pick_declared_resolution(cw as i64, ch as i64);
-        screenshot::capture_resized_for_claude(cx, cy, cw, ch, dw, dh)
-            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })
+        std::thread::spawn(move || {
+            let (cx, cy, cw, ch) = screenshot::active_workspace_geometry()
+                .map(|g| (g.0, g.1, g.2 as i32, g.3 as i32))
+                .unwrap_or((x, y, w as i32, h as i32));
+            let (dw, dh) = screenshot::pick_declared_resolution(cw as i64, ch as i64);
+            screenshot::capture_resized_for_claude(cx, cy, cw, ch, dw, dh).map_err(|e| e.to_string())
+        })
+        .join()
+        .map_err(|_| -> Box<dyn std::error::Error + Send + Sync> {
+            "screenshot thread panicked".into()
+        })?
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })
     };
 
     let running_apps = crate::desktop::list_running_apps();

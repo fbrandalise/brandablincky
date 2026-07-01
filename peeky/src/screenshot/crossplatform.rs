@@ -23,7 +23,11 @@ impl ScreenshotBackend for Backend {
             return Ok(geo);
         }
         #[cfg(target_os = "linux")]
-        return super::x11::Backend::active_workspace_geometry();
+        if let Ok(geo) = super::x11::Backend::active_workspace_geometry() {
+            return Ok(geo);
+        }
+        #[cfg(target_os = "linux")]
+        return super::portal::Backend::active_workspace_geometry();
         #[cfg(not(target_os = "linux"))]
         Err("no monitors found".into())
     }
@@ -40,7 +44,13 @@ impl ScreenshotBackend for Backend {
             return Ok(result);
         }
         #[cfg(target_os = "linux")]
-        return super::x11::Backend::capture_resized_for_claude(
+        if let Ok(result) = super::x11::Backend::capture_resized_for_claude(
+            x, y, width, height, target_w, target_h,
+        ) {
+            return Ok(result);
+        }
+        #[cfg(target_os = "linux")]
+        return super::portal::Backend::capture_resized_for_claude(
             x, y, width, height, target_w, target_h,
         );
         #[cfg(not(target_os = "linux"))]

@@ -91,11 +91,14 @@ impl DesktopControl for Backend {
     /// substring 150ms later. Claude's `target` is whatever the user said,
     /// which is ambiguous between class names ("firefox") and title text
     /// ("Inbox"), so we try both. Non-matches fail silently in hyprctl.
+    /// The class attempt blocks on hyprctl's exit so callers that queue a
+    /// hotkey right after (e.g. find_action's switch-then-key) don't race
+    /// it: the focus dispatch lands before the key does.
     fn switch_to_window(target: &str) {
         eprintln!("[action:switch_to_window] focusing '{}'", target);
         let _ = Command::new("hyprctl")
             .args(["dispatch", "focuswindow", &format!("class:{}", target)])
-            .spawn();
+            .status();
         let target = target.to_string();
         thread::spawn(move || {
             // > hyprctl dispatch round-trip (~30ms) so the class attempt

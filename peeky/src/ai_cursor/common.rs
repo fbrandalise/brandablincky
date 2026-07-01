@@ -8,21 +8,22 @@ use std::time::{Duration, Instant};
 use super::CursorState;
 
 // ── Portable constants ─────────────────────────────────────────────────────
-// Time for cursor lag to halve. 91.7ms reproduces the previous 500Hz × 0.015
-// feel under a delta-time formulation, so the cursor is equally snappy at
-// 60Hz, 144Hz, or 500Hz tick rates.
-pub const SMOOTHING_HALF_LIFE: f64 = 0.0917;
+// Time for cursor lag to halve. Lower = tighter tracking, less visible
+// trailing distance while the mouse is moving fast.
+// ↑ smoother/floatier motion, more visible lag behind the real pointer.
+// ↓ snappier, closer to 1:1 tracking; too low starts to feel jittery/rigid.
+pub const SMOOTHING_HALF_LIFE: f64 = 0.025;
 // macOS: smaller Y offset since the cursor feels closer to the pointer
 #[cfg(target_os = "macos")]
 pub const Y_OFFSET: i32 = -20;
 #[cfg(target_os = "macos")]
 pub const X_OFFSET: i32 = 20;
 
-// Linux/Windows: larger Y offset
+// Linux/Windows: no offset, the sprite sits exactly on the real pointer.
 #[cfg(not(target_os = "macos"))]
-pub const Y_OFFSET: i32 = -70;
+pub const Y_OFFSET: i32 = 0;
 #[cfg(not(target_os = "macos"))]
-pub const X_OFFSET: i32 = 20;
+pub const X_OFFSET: i32 = 0;
 pub const POINT_DURATION: Duration = Duration::from_secs(3);
 pub const CURSOR_DISPLAY_SIZE: f64 = 18.0;
 
@@ -34,9 +35,25 @@ pub fn cursor_display_size() -> f64 {
 
 pub const CURSOR_PNG: &[u8] = include_bytes!("../../assets/cursor.png");
 
+/// How long the Alt-triggered description bubble stays on screen before
+/// auto-dismissing. Mirrors `POINT_DURATION`'s revert-after pattern.
+pub const DESCRIBE_BUBBLE_DURATION: Duration =
+    Duration::from_millis(crate::tuning::DESCRIBE_BUBBLE_DURATION_MS);
+
 // ── Thread-safe channels ───────────────────────────────────────────────────
 pub static CURSOR_SENDER: OnceLock<Sender<(i32, i32)>> = OnceLock::new();
 pub static STATE_SENDER: OnceLock<Sender<CursorState>> = OnceLock::new();
+pub static DESCRIBE_SENDER: OnceLock<Sender<(i32, i32, String)>> = OnceLock::new();
+
+/// Ask the cursor overlay to show a description bubble at (x, y) for
+/// `DESCRIBE_BUBBLE_DURATION`, then auto-dismiss. Callable from any thread
+/// (the Alt-hotkey callback runs on evdev's listener thread). No-op if
+/// `cursor()` hasn't been initialized yet.
+pub fn describe_at(x: i32, y: i32, text: String) {
+    if let Some(sender) = DESCRIBE_SENDER.get() {
+        let _ = sender.send((x, y, text));
+    }
+}
 
 /// Push a state change to the cursor overlay. Callable from any thread.
 /// No-op if `cursor()` hasn't been initialized yet.

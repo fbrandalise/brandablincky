@@ -101,3 +101,53 @@ pub const WORKING_CONTEXT_RECENT_TURNS: usize = 6;
 /// ↑ compact less often. larger peak request before it kicks in.
 /// ↓ compact sooner. more frequent summarizer calls.
 pub const WORKING_CONTEXT_COMPACT_AT: usize = 10;
+
+// ────── portal screen capture (GNOME/Wayland fallback) ──────
+
+/// How long to wait for the PipeWire stream to report its first negotiated
+/// video format after starting a portal ScreenCast session, before giving up.
+/// ↑ tolerates a slow first-time consent dialog / compositor. slower failure signal.
+/// ↓ fails fast on a genuinely broken portal. may abandon a legitimately slow first run.
+pub const PORTAL_STREAM_READY_TIMEOUT_MS: u64 = 5_000;
+
+/// Max age of a cached PipeWire frame `capture_resized_for_claude` will reuse
+/// without waiting for a fresher one.
+/// ↑ fewer waits on a slow-to-emit stream. risks a stale screenshot.
+/// ↓ always near-live. more waiting when frames arrive slower than voice turns.
+pub const PORTAL_FRAME_MAX_AGE_MS: u64 = 250;
+
+// ────── evdev mouse position (GNOME/Wayland fallback) ──────
+
+/// Interval between drift-correcting X11 resyncs of the evdev-integrated
+/// mouse position. XQueryPointer only reflects live motion while the cursor
+/// is over an XWayland-backed window, so this can't just replace the evdev
+/// reading outright — it's a periodic nudge, not a source of truth.
+/// ↑ less frequent correction. more accumulated drift between resyncs.
+/// ↓ tighter drift bound. more X11 queries (cheap, but still periodic wakeups).
+pub const MOUSE_EVDEV_RESYNC_MS: u64 = 2_000;
+
+/// Fraction of the gap to the X11 reading closed on each resync tick, so a
+/// stale/frozen X11 value (cursor currently over a native Wayland surface)
+/// can't yank the overlay to the wrong spot.
+/// ↑ corrects drift faster. more visible nudging if the X11 reading is stale.
+/// ↓ smoother, slower correction. drift persists longer between good resyncs.
+pub const MOUSE_EVDEV_RESYNC_BLEND: f64 = 0.2;
+
+// ────── Alt region analysis ──────
+
+/// Crop size (pixels) centered on the mouse when Alt triggers a region
+/// analysis.
+/// ↑ more context for Claude to describe. slower upload, costlier call.
+/// ↓ tighter, faster analysis. may miss context just outside the crop.
+pub const ANALYZE_REGION_WIDTH: u32 = 480;
+pub const ANALYZE_REGION_HEIGHT: u32 = 360;
+
+/// How long the on-screen description bubble stays before auto-dismissing.
+/// Mirrors `ai_cursor::common::POINT_DURATION`'s revert-after pattern.
+/// ↑ more time to read. lingers over what you're pointing at next.
+/// ↓ snappier turnover. may vanish before a longer description is read.
+pub const DESCRIBE_BUBBLE_DURATION_MS: u64 = 6_000;
+
+/// Max characters per line before the description bubble wraps.
+/// ↑ wider bubble, fewer lines. ↓ narrower bubble, more lines.
+pub const DESCRIBE_BUBBLE_MAX_CHARS_PER_LINE: usize = 40;

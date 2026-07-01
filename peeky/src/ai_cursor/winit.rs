@@ -19,12 +19,24 @@ use winit::window::{Window, WindowAttributes, WindowId};
 
 use super::CursorState;
 use super::common::{
-    self, CURSOR_PNG, CURSOR_SENDER, DirtyRect, STATE_SENDER, cursor_display_size, tick,
+    self, CURSOR_PNG, CURSOR_SENDER, DESCRIBE_SENDER, DirtyRect, STATE_SENDER, cursor_display_size,
+    tick,
 };
 use super::platform;
 use super::renderer::Renderer;
-use crate::painter::{DrawSkia, LoadingSpinner, Soundwave, SpriteSkia};
+use crate::painter::{DrawSkia, LoadingSpinner, Soundwave, SpriteSkia, TextBubble};
 use crate::tray;
+
+/// Union two optional dirty rects, same rule the sprite tracking below uses:
+/// present-and-absent widens to the present one, both-present unions, both
+/// absent stays absent.
+fn union_opt(a: Option<DirtyRect>, b: Option<DirtyRect>) -> Option<DirtyRect> {
+    match (a, b) {
+        (None, None) => None,
+        (Some(r), None) | (None, Some(r)) => Some(r),
+        (Some(a), Some(b)) => Some(a.union(b)),
+    }
+}
 
 struct CursorApp {
     attrs: WindowAttributes,
@@ -36,6 +48,11 @@ struct CursorApp {
     drawable: Box<dyn DrawSkia>,
     receiver: Receiver<(i32, i32)>,
     state_receiver: Receiver<CursorState>,
+    /// Alt-hotkey region descriptions: `(x, y, text)` to show in a bubble.
+    describe_receiver: Receiver<(i32, i32, String)>,
+    /// Active description bubble, if any, with its anchor position and
+    /// expiry. Cleared once `Instant::now()` passes the expiry.
+    describe_bubble: Option<(TextBubble, f64, f64, Instant)>,
     cursor_x: f64,
     cursor_y: f64,
     override_target: Option<(i32, i32, Instant)>,
@@ -44,6 +61,10 @@ struct CursorApp {
     /// so we know which pixels to clear before drawing the new one. `None`
     /// means nothing was drawn last frame (or the canvas was just allocated).
     last_sprite_rect: Option<DirtyRect>,
+    /// Same as `last_sprite_rect`, tracked separately for the description
+    /// bubble since it's an independent drawable that can appear/disappear
+    /// on its own schedule.
+    last_bubble_rect: Option<DirtyRect>,
     /// Tracks the previous hotkey state so we can detect press/release edges
     /// and send the matching CursorState transitions.
     was_recording: bool,
@@ -163,6 +184,23 @@ impl CursorApp {
             };
         }
 
+        // Drain describe-bubble requests; the latest one wins. Independent of
+        // `state_receiver` above: the bubble draws as an extra layer over
+        // whatever the cursor is currently doing, not a CursorState swap.
+        while let Ok((x, y, text)) = self.describe_receiver.try_recv() {
+            self.describe_bubble = Some((
+                TextBubble::new(&text),
+                x as f64,
+                y as f64,
+                Instant::now() + common::DESCRIBE_BUBBLE_DURATION,
+            ));
+        }
+        if let Some((_, _, _, expiry)) = &self.describe_bubble
+            && Instant::now() >= *expiry
+        {
+            self.describe_bubble = None;
+        }
+
         // Run one tick to advance position.
         let next = tick(
             &self.receiver,
@@ -189,8 +227,24 @@ impl CursorApp {
             y1: y.ceil() as i32 + half_h,
         });
 
-        // Dirty region = union of last-frame sprite + this-frame sprite, or
-        // the whole canvas if we just allocated (need to initialize softbuffer).
+        // Same bounding-box treatment as the cursor drawable above, but for
+        // the description bubble, which appears/disappears on its own
+        // schedule rather than following `next`.
+        let bubble_rect = self.describe_bubble.as_ref().map(|(bubble, bx, by, _)| {
+            let (bw, bh) = bubble.size();
+            let half_w = (bw / 2.0).ceil() as i32 + 2;
+            let half_h = (bh / 2.0).ceil() as i32 + 2;
+            DirtyRect {
+                x0: bx.floor() as i32 - half_w,
+                y0: by.floor() as i32 - half_h,
+                x1: bx.ceil() as i32 + half_w,
+                y1: by.ceil() as i32 + half_h,
+            }
+        });
+
+        // Dirty region = union of last-frame sprite + this-frame sprite +
+        // last-frame bubble + this-frame bubble, or the whole canvas if we
+        // just allocated (need to initialize softbuffer).
         let dirty = if needs_alloc {
             Some(DirtyRect {
                 x0: 0,
@@ -199,11 +253,9 @@ impl CursorApp {
                 y1: canvas_h as i32,
             })
         } else {
-            match (self.last_sprite_rect, new_rect) {
-                (None, None) => None,
-                (Some(r), None) | (None, Some(r)) => Some(r),
-                (Some(a), Some(b)) => Some(a.union(b)),
-            }
+            let sprite_dirty = union_opt(self.last_sprite_rect, new_rect);
+            let bubble_dirty = union_opt(self.last_bubble_rect, bubble_rect);
+            union_opt(sprite_dirty, bubble_dirty)
         };
 
         let present_dirty = if let Some(rect) = dirty {
@@ -227,6 +279,11 @@ impl CursorApp {
                 if let Some((x, y)) = next {
                     self.drawable.draw_skia(canvas, x, y);
                 }
+                // Bubble draws as an extra layer, independent of the cursor
+                // drawable above.
+                if let Some((bubble, bx, by, _)) = &self.describe_bubble {
+                    bubble.draw_skia(canvas, *bx, *by);
+                }
                 Some(rect)
             }
         } else {
@@ -238,6 +295,7 @@ impl CursorApp {
             .expect("renderer present");
 
         self.last_sprite_rect = new_rect;
+        self.last_bubble_rect = bubble_rect;
 
         // Rolling FPS log: count frames over a 1-second window, then print
         // and reset. Diagnostic for tuning cursor smoothness on different
@@ -266,6 +324,9 @@ pub fn cursor(initial_x: i32, initial_y: i32) -> ! {
 
     let (state_sender, state_receiver) = channel::<CursorState>();
     let _ = STATE_SENDER.set(state_sender);
+
+    let (describe_sender, describe_receiver) = channel::<(i32, i32, String)>();
+    let _ = DESCRIBE_SENDER.set(describe_sender);
 
     let initial_drawable: Box<dyn DrawSkia> =
         Box::new(SpriteSkia::from_png(CURSOR_PNG, cursor_display_size()));
@@ -296,11 +357,14 @@ pub fn cursor(initial_x: i32, initial_y: i32) -> ! {
         drawable: initial_drawable,
         receiver,
         state_receiver,
+        describe_receiver,
+        describe_bubble: None,
         cursor_x: initial_x as f64,
         cursor_y: initial_y as f64,
         override_target: None,
         last_tick: None,
         last_sprite_rect: None,
+        last_bubble_rect: None,
         was_recording: false,
         frame_count: 0,
         fps_log_start: None,
@@ -315,4 +379,4 @@ pub fn cursor(initial_x: i32, initial_y: i32) -> ! {
 // builds (via orchestrator), but we re-export it here too so external code
 // can stay backend-agnostic.
 #[allow(unused_imports)]
-pub use common::{point_at, set_state};
+pub use common::{describe_at, point_at, set_state};

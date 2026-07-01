@@ -33,6 +33,24 @@ pub trait HotkeyBackend {
     #[allow(dead_code)]
     fn on_release(f: Box<dyn Fn() + Send + Sync + 'static>);
 
+    /// Register a callback fired when the region-analysis key (Alt) is
+    /// pressed. Only the evdev backend implements this for real; other
+    /// backends keep the default no-op, same treatment as `poll()` below,
+    /// so the contract doesn't force platforms that don't support it yet to
+    /// wire up a stub.
+    ///
+    /// `allow(dead_code)`: only the evdev backend's build calls this.
+    #[allow(dead_code)]
+    fn on_analyze_press(_f: Box<dyn Fn() + Send + Sync + 'static>) {}
+
+    /// Register a callback fired when the mouse-tracking recalibration key
+    /// (Home) is pressed. Same default-no-op treatment as
+    /// [`on_analyze_press`](Self::on_analyze_press).
+    ///
+    /// `allow(dead_code)`: only the evdev backend's build calls this.
+    #[allow(dead_code)]
+    fn on_recalibrate_press(_f: Box<dyn Fn() + Send + Sync + 'static>) {}
+
     /// Drain pending hotkey events into the recording state. Required by
     /// backends whose events arrive on a queue (e.g. `global-hotkey`); a
     /// no-op for backends with an independent listener thread (signals).

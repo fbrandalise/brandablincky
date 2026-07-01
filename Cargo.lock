@@ -224,6 +224,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ashpd"
+version = "0.13.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "281e6645758940dee594495e28807a7672ce40f11ebf4df6c22c4fcd59e2689f"
+dependencies = [
+ "enumflags2",
+ "futures-util",
+ "getrandom 0.4.2",
+ "serde",
+ "serde_repr",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
 name = "async-broadcast"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5348,6 +5363,8 @@ checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
 name = "peeky"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
+ "ashpd",
  "base64 0.22.1",
  "bytemuck",
  "cpal",
@@ -5371,6 +5388,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "open",
+ "pipewire",
  "pollster",
  "raw-window-handle",
  "regex",
@@ -7949,6 +7967,7 @@ dependencies = [
  "signal-hook-registry",
  "socket2",
  "tokio-macros",
+ "tracing",
  "windows-sys 0.61.2",
 ]
 
@@ -10191,6 +10210,7 @@ dependencies = [
  "rustix 1.1.4",
  "serde",
  "serde_repr",
+ "tokio",
  "tracing",
  "uds_windows",
  "uuid",

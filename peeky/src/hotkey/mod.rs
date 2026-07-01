@@ -68,3 +68,19 @@ pub fn on_press(f: impl Fn() + Send + Sync + 'static) {
 pub fn on_release(f: impl Fn() + Send + Sync + 'static) {
     Active::on_release(Box::new(f));
 }
+
+/// Register a callback fired when the region-analysis key (Alt) is pressed.
+/// Call before [`init`]. Only the evdev backend fires this for real; other
+/// backends accept the registration but never call it.
+#[allow(dead_code)]
+pub fn on_analyze_press(f: impl Fn() + Send + Sync + 'static) {
+    Active::on_analyze_press(Box::new(f));
+}
+
+/// Register a callback fired when the mouse-tracking recalibration key
+/// (Home) is pressed. Call before [`init`]. Only the evdev backend fires
+/// this for real; other backends accept the registration but never call it.
+#[allow(dead_code)]
+pub fn on_recalibrate_press(f: impl Fn() + Send + Sync + 'static) {
+    Active::on_recalibrate_press(Box::new(f));
+}

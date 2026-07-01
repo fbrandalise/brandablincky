@@ -23,13 +23,13 @@ use crate::painter::{LoadingSpinner, Painter, Soundwave, Sprite};
 const APP_ID: &str = "com.tabby.cursor-mvp";
 const CURSOR_PNG: &[u8] = include_bytes!("../../assets/cursor.png");
 const CURSOR_DISPLAY_SIZE: f64 = 18.0;
-// Time for cursor lag to halve. 91.7ms reproduces the previous 500Hz × 0.015
-// feel under a delta-time formulation, so changing TICK_MS no longer alters
-// the perceived snappiness.
-const SMOOTHING_HALF_LIFE: f64 = 0.0917;
+// Time for cursor lag to halve. Lower = tighter tracking, less visible
+// trailing distance while the mouse is moving fast.
+const SMOOTHING_HALF_LIFE: f64 = 0.025;
 const TICK_MS: u64 = 2;
-const Y_OFFSET: i32 = -70;
-const X_OFFSET: i32 = 20;
+// No offset: the sprite sits exactly on the real pointer.
+const Y_OFFSET: i32 = 0;
+const X_OFFSET: i32 = 0;
 const POINT_DURATION: Duration = Duration::from_secs(3);
 
 /// Channel for `point_at` calls. Initialized inside `cursor()` so any
@@ -56,6 +56,16 @@ pub fn point_at(x: i32, y: i32) {
     if let Some(sender) = CURSOR_SENDER.get() {
         let _ = sender.send((x, y));
     }
+}
+
+/// Show a description bubble at (x, y). Not implemented on this backend:
+/// `Painter` only tracks one drawable/position at a time, so a second,
+/// independent layer needs a `gtk::Overlay` container this hasn't been
+/// wired up for. Deferred rather than built blind — this backend targets
+/// Hyprland, and the Alt-hotkey region-analysis feature was built and
+/// tested against GNOME/evdev, not this compositor.
+pub fn describe_at(_x: i32, _y: i32, text: String) {
+    eprintln!("[ai_cursor] describe_at not implemented on the Hyprland/GTK overlay yet: {text}");
 }
 
 /// Initialize and run the cursor overlay. Blocks the calling thread for

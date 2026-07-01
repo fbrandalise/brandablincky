@@ -175,6 +175,116 @@ fn spinner_size(scale: f64) -> (f64, f64) {
     (diameter, diameter)
 }
 
+// ── TextBubble (Alt-triggered region description) ───────────────────────────
+// Wrapping is shared; each backend module below implements its own drawing
+// and sizing. Cairo gets real antialiased text for free via `show_text`
+// (monospace, fixed-width sizing below). The tiny-skia backend has no font
+// renderer at all, so it rasterizes glyphs itself via `ab_glyph` against the
+// bundled Adwaita Sans font (SIL OFL-1.1, `assets/AdwaitaSans-LICENSE.txt`)
+// — see `skia_backend::render_bubble`, which uses real (proportional) glyph
+// metrics instead of the fixed grid below.
+const BUBBLE_PADDING: f64 = 12.0;
+const BUBBLE_CORNER_RADIUS: f64 = 10.0;
+const BUBBLE_BG_COLOR: (f64, f64, f64, f64) = (0.05, 0.05, 0.05, 0.85);
+const BUBBLE_TEXT_COLOR: (f64, f64, f64, f64) = (1.0, 1.0, 1.0, 0.95);
+/// Fixed monospace cell size (cursor-scale) the Cairo backend lays text out
+/// on, since `cr.text_extents()` needs a live context `size()` doesn't have.
+const BUBBLE_CHAR_WIDTH: f64 = 13.0;
+const BUBBLE_LINE_HEIGHT: f64 = 26.0;
+
+/// Word-wrapped description text, ready for either backend to draw.
+pub struct TextBubble {
+    lines: Vec<String>,
+    scale: f64,
+    /// Rendered once on first draw/size query, then reused: rasterizing
+    /// glyphs is comparatively expensive, and the overlay redraws every
+    /// frame for as long as the bubble is showing. Only the tiny-skia
+    /// backend needs this — Cairo re-measures/redraws live each frame
+    /// cheaply via `show_text`.
+    #[cfg(not(all(target_os = "linux", feature = "hyprland")))]
+    cached_pixmap: std::cell::RefCell<Option<tiny_skia::Pixmap>>,
+}
+
+impl TextBubble {
+    pub fn new(text: &str) -> Self {
+        Self {
+            lines: wrap_text(text, crate::tuning::DESCRIBE_BUBBLE_MAX_CHARS_PER_LINE),
+            scale: overlay_scale(),
+            #[cfg(not(all(target_os = "linux", feature = "hyprland")))]
+            cached_pixmap: std::cell::RefCell::new(None),
+        }
+    }
+
+    /// Bubble content size (excluding padding), in display pixels. Cairo
+    /// backend only: tiny-skia measures real glyph advances instead (see
+    /// `skia_backend::render_bubble`).
+    #[cfg_attr(not(all(target_os = "linux", feature = "hyprland")), allow(dead_code))]
+    fn content_size(&self) -> (f64, f64) {
+        let max_chars = self.lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+        (
+            max_chars as f64 * BUBBLE_CHAR_WIDTH * self.scale,
+            self.lines.len() as f64 * BUBBLE_LINE_HEIGHT * self.scale,
+        )
+    }
+}
+
+/// Greedy word-wrap: packs whole words onto a line up to `max_chars`,
+/// hard-breaking single words that alone exceed the limit. UTF-8 safe
+/// (splits on chars, not bytes). Respects literal newlines in `text` as
+/// forced line breaks (each paragraph is wrapped independently), so a
+/// description followed by a "- do X" suggestion on its own line stays
+/// visually separated instead of getting flattened into one paragraph.
+fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    for paragraph in text.split('\n') {
+        if paragraph.trim().is_empty() {
+            lines.push(String::new());
+        } else {
+            lines.extend(wrap_paragraph(paragraph, max_chars));
+        }
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+fn wrap_paragraph(text: &str, max_chars: usize) -> Vec<String> {
+    let max_chars = max_chars.max(1);
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut current_len = 0usize;
+    for word in text.split_whitespace() {
+        let mut remaining: Vec<char> = word.chars().collect();
+        while !remaining.is_empty() {
+            let sep_len = if current.is_empty() { 0 } else { 1 };
+            if current_len + sep_len + remaining.len() <= max_chars {
+                if sep_len == 1 {
+                    current.push(' ');
+                    current_len += 1;
+                }
+                current.extend(remaining.iter());
+                current_len += remaining.len();
+                remaining.clear();
+            } else if current.is_empty() {
+                let split_at = remaining.len().min(max_chars);
+                let head: String = remaining.drain(..split_at).collect();
+                lines.push(head);
+            } else {
+                lines.push(std::mem::take(&mut current));
+                current_len = 0;
+            }
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 //   Cairo / GTK backend (Hyprland)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -291,6 +401,50 @@ mod cairo_backend {
 
         fn size(&self) -> (f64, f64) {
             spinner_size(self.scale)
+        }
+    }
+
+    impl Drawable for TextBubble {
+        fn draw(&self, cr: &cairo::Context, x: f64, y: f64) {
+            let (w, h) = self.size();
+            let (bx, by) = (x - w / 2.0, y - h / 2.0);
+
+            cr.set_source_rgba(
+                BUBBLE_BG_COLOR.0,
+                BUBBLE_BG_COLOR.1,
+                BUBBLE_BG_COLOR.2,
+                BUBBLE_BG_COLOR.3,
+            );
+            rounded_rect(cr, bx, by, w, h, BUBBLE_CORNER_RADIUS * self.scale);
+            cr.fill().expect("fill bubble background");
+
+            cr.select_font_face(
+                "monospace",
+                cairo::FontSlant::Normal,
+                cairo::FontWeight::Normal,
+            );
+            cr.set_font_size(BUBBLE_LINE_HEIGHT * 0.65 * self.scale);
+            cr.set_source_rgba(
+                BUBBLE_TEXT_COLOR.0,
+                BUBBLE_TEXT_COLOR.1,
+                BUBBLE_TEXT_COLOR.2,
+                BUBBLE_TEXT_COLOR.3,
+            );
+            for (i, line) in self.lines.iter().enumerate() {
+                let baseline_y = by
+                    + BUBBLE_PADDING * self.scale
+                    + (i as f64 + 0.75) * BUBBLE_LINE_HEIGHT * self.scale;
+                cr.move_to(bx + BUBBLE_PADDING * self.scale, baseline_y);
+                cr.show_text(line).expect("show_text failed");
+            }
+        }
+
+        fn size(&self) -> (f64, f64) {
+            let (w, h) = self.content_size();
+            (
+                w + 2.0 * BUBBLE_PADDING * self.scale,
+                h + 2.0 * BUBBLE_PADDING * self.scale,
+            )
         }
     }
 
@@ -502,6 +656,150 @@ mod skia_backend {
 
         fn size(&self) -> (f64, f64) {
             spinner_size(self.scale)
+        }
+    }
+
+    /// Pixel height (cursor-scale) glyphs are rasterized at.
+    const BUBBLE_FONT_SIZE: f64 = 19.0;
+
+    /// Bundled UI font for the description bubble. SIL OFL-1.1; see
+    /// `assets/AdwaitaSans-LICENSE.txt`. Loaded once, reused for every
+    /// bubble (parsing a TTF isn't free, and the font never changes).
+    fn bubble_font() -> &'static ab_glyph::FontRef<'static> {
+        static FONT: OnceLock<ab_glyph::FontRef<'static>> = OnceLock::new();
+        FONT.get_or_init(|| {
+            ab_glyph::FontRef::try_from_slice(include_bytes!("../assets/AdwaitaSans-Regular.ttf"))
+                .expect("bundled font failed to parse")
+        })
+    }
+
+    /// Blends a coverage-scaled source color onto a premultiplied
+    /// destination pixel ("over" compositing). `src_*` are already
+    /// premultiplied by both the color's own alpha and the glyph coverage.
+    fn blend_over(
+        dst: tiny_skia::PremultipliedColorU8,
+        src_r: f32,
+        src_g: f32,
+        src_b: f32,
+        src_a: f32,
+    ) -> tiny_skia::PremultipliedColorU8 {
+        let inv = 1.0 - src_a;
+        let r = src_r + dst.red() as f32 / 255.0 * inv;
+        let g = src_g + dst.green() as f32 / 255.0 * inv;
+        let b = src_b + dst.blue() as f32 / 255.0 * inv;
+        let a = src_a + dst.alpha() as f32 / 255.0 * inv;
+        tiny_skia::PremultipliedColorU8::from_rgba(
+            (r * 255.0).round() as u8,
+            (g * 255.0).round() as u8,
+            (b * 255.0).round() as u8,
+            (a * 255.0).round() as u8,
+        )
+        .unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT)
+    }
+
+    /// Renders the background + every glyph into a freshly sized `Pixmap`,
+    /// once. `TextBubble::draw_skia` blits the cached result every frame
+    /// after that, the same pattern `SpriteSkia` uses for its decoded PNG.
+    fn render_bubble(lines: &[String], scale: f64) -> Pixmap {
+        use ab_glyph::{Font, ScaleFont, point};
+
+        let scaled_font = bubble_font().as_scaled(ab_glyph::PxScale::from((BUBBLE_FONT_SIZE * scale) as f32));
+        let line_h = (BUBBLE_LINE_HEIGHT * scale) as f32;
+        let pad = (BUBBLE_PADDING * scale) as f32;
+
+        let max_line_w = lines
+            .iter()
+            .map(|line| {
+                line.chars()
+                    .map(|c| scaled_font.h_advance(scaled_font.glyph_id(c)))
+                    .sum::<f32>()
+            })
+            .fold(0.0_f32, f32::max);
+
+        let w = (max_line_w + 2.0 * pad).ceil().max(1.0) as u32;
+        let h = (lines.len() as f32 * line_h + 2.0 * pad).ceil().max(1.0) as u32;
+        let mut pm = Pixmap::new(w, h).expect("nonzero bubble pixmap size");
+
+        if let Some(bg_path) = rounded_rect_path(
+            0.0,
+            0.0,
+            w as f32,
+            h as f32,
+            (BUBBLE_CORNER_RADIUS * scale) as f32,
+        ) {
+            let mut bg_paint = Paint::default();
+            bg_paint.set_color(
+                tiny_skia::Color::from_rgba(
+                    BUBBLE_BG_COLOR.0 as f32,
+                    BUBBLE_BG_COLOR.1 as f32,
+                    BUBBLE_BG_COLOR.2 as f32,
+                    BUBBLE_BG_COLOR.3 as f32,
+                )
+                .unwrap(),
+            );
+            bg_paint.anti_alias = true;
+            pm.fill_path(&bg_path, &bg_paint, FillRule::Winding, Transform::identity(), None);
+        }
+
+        let (tr, tg, tb, ta) = (
+            BUBBLE_TEXT_COLOR.0 as f32,
+            BUBBLE_TEXT_COLOR.1 as f32,
+            BUBBLE_TEXT_COLOR.2 as f32,
+            BUBBLE_TEXT_COLOR.3 as f32,
+        );
+        let (pw, ph) = (pm.width() as i32, pm.height() as i32);
+
+        for (row, line) in lines.iter().enumerate() {
+            let baseline_y = pad + row as f32 * line_h + scaled_font.ascent();
+            let mut pen_x = pad;
+            for ch in line.chars() {
+                let glyph_id = scaled_font.glyph_id(ch);
+                let advance = scaled_font.h_advance(glyph_id);
+                let glyph = glyph_id.with_scale_and_position(scaled_font.scale(), point(pen_x, baseline_y));
+                if let Some(outlined) = scaled_font.font().outline_glyph(glyph) {
+                    let bounds = outlined.px_bounds();
+                    let (ox, oy) = (bounds.min.x as i32, bounds.min.y as i32);
+                    outlined.draw(|gx, gy, coverage| {
+                        if coverage <= 0.0 {
+                            return;
+                        }
+                        let (px, py) = (ox + gx as i32, oy + gy as i32);
+                        if px < 0 || py < 0 || px >= pw || py >= ph {
+                            return;
+                        }
+                        let idx = (py as u32 * pm.width() + px as u32) as usize;
+                        let pixels = pm.pixels_mut();
+                        let dst = pixels[idx];
+                        let src_a = ta * coverage;
+                        pixels[idx] = blend_over(dst, tr * src_a, tg * src_a, tb * src_a, src_a);
+                    });
+                }
+                pen_x += advance;
+            }
+        }
+
+        pm
+    }
+
+    impl DrawSkia for TextBubble {
+        fn draw_skia(&self, pixmap: &mut Pixmap, x: f64, y: f64) {
+            if self.cached_pixmap.borrow().is_none() {
+                *self.cached_pixmap.borrow_mut() = Some(render_bubble(&self.lines, self.scale));
+            }
+            let cache = self.cached_pixmap.borrow();
+            let Some(bubble) = cache.as_ref() else { return };
+            let (w, h) = (bubble.width() as f64, bubble.height() as f64);
+            let transform = Transform::from_translate((x - w / 2.0) as f32, (y - h / 2.0) as f32);
+            pixmap.draw_pixmap(0, 0, bubble.as_ref(), &PixmapPaint::default(), transform, None);
+        }
+
+        fn size(&self) -> (f64, f64) {
+            if self.cached_pixmap.borrow().is_none() {
+                *self.cached_pixmap.borrow_mut() = Some(render_bubble(&self.lines, self.scale));
+            }
+            let cache = self.cached_pixmap.borrow();
+            let bubble = cache.as_ref().expect("just populated above");
+            (bubble.width() as f64, bubble.height() as f64)
         }
     }
 

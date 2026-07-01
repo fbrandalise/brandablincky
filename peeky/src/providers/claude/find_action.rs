@@ -239,6 +239,19 @@ scroll_amount=N): scroll the focused area.\n\
 - `launch_app`: start an app that isn't running.\n\
 - `switch_to_window`: focus an already-running app by window class.\n\
 \n\
+For \"go to X\" / \"navigate to X\" requests, always call `open_url` with \
+your best reconstruction of the URL, even if the transcript has speech-to-\
+text artifacts (stray periods, capitalization, \"dot\" spelled out) — \
+e.g. \"bling.com. Br.\" means https://bling.com.br. Never respond to a \
+navigation request with just a click on the address bar and no `open_url` \
+or follow-up `type`; a click alone does not navigate anywhere.\n\
+\n\
+When the request names a specific app (\"in Chrome\", \"in Spotify\") and \
+you're about to send a hotkey or type into it, call `switch_to_window` for \
+that app FIRST, even if it looks focused in the screenshot. Hotkeys fire \
+wherever the OS focus actually is by the time the action runs, not where \
+it looked focused when the screenshot was taken.\n\
+\n\
 FORBIDDEN: action=\"screenshot\" on the computer tool. You already have \
 the screenshot. Calling screenshot wastes ~6s of latency.\n\
 \n\

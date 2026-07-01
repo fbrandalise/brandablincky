@@ -5,6 +5,7 @@
 mod agent_loop;
 mod chat;
 mod classifier;
+mod describe_region;
 mod find_action;
 mod history;
 mod integration;

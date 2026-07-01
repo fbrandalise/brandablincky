@@ -60,6 +60,11 @@ softbuffer = "0.4"
 tiny-skia = "0.11"
 winit = "0.30"
 xcap = "0.9.6"
+# Glyph rasterization for the tiny-skia overlay's description bubble (Alt
+# hotkey). Cairo/GTK gets real text for free via `show_text`; tiny-skia has
+# no font renderer at all. Tiny, pure-Rust, no transitive deps beyond
+# owned_ttf_parser.
+ab_glyph = "0.2"
 
 # Unix-only: dup2/pipe fd plumbing for teeing stdout+stderr to the log file
 # (see logging.rs). macOS and Linux both pull this; Windows gets a no-op.
@@ -77,6 +82,17 @@ hyprland = { version = "0.4.0-beta.3", optional = true }
 signal-hook = { version = "0.4.4", optional = true }
 cpal = { version = "0.17.3", features = ["jack"] }
 evdev = { version = "0.13.2", default-features = false }
+x11 = { version = "2.21", features = ["xlib", "xrandr"] }
+# GNOME/Mutter Wayland screenshot fallback: xcap's wayshot protocol and raw
+# X11 XGetImage both fail to capture real desktop content under GNOME's
+# compositor, so this negotiates a screen share via the xdg-desktop-portal
+# ScreenCast interface and reads frames over PipeWire (same mechanism
+# Firefox/OBS use). See src/screenshot/portal.rs.
+# Pinned to match xcap's transitive `pipewire = "^0.9"` dependency: two
+# different pipewire-sys versions can't coexist (both link the same native
+# pipewire-0.3 library), so this has to track whatever xcap pulls in.
+ashpd = { version = "0.13", default-features = false, features = ["screencast", "tokio"] }
+pipewire = "0.9"
 
 # macOS-only renderer: softbuffer's macOS backend strips alpha at the
 # CGImage level (CGImageAlphaInfo::NoneSkipFirst), so we use wgpu instead

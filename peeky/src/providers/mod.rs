@@ -1,6 +1,7 @@
 pub mod claude;
 pub mod device_id;
 pub mod invite_code;
+pub mod portal_restore_token;
 pub mod proxy_contract;
 pub mod session_jwt;
 pub mod stt_deepgram;

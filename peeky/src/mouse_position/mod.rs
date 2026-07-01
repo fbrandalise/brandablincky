@@ -13,13 +13,23 @@ pub use backend::MousePositionBackend;
 mod crossplatform;
 #[cfg(all(target_os = "linux", feature = "hyprland"))]
 mod hyprland;
+#[cfg(all(target_os = "linux", not(feature = "hyprland")))]
+mod evdev;
 
-// Linux uses the native Hyprland backend; everything else (and Linux under the
-// no-default-features build) uses the portable backend. The two cfgs are
-// mutually exclusive and exhaustive, so exactly one Active is always defined.
+// Hyprland uses its native IPC. Linux without the hyprland feature (GNOME,
+// X11, anything else) uses raw evdev: X11 querying via `crossplatform`'s
+// XQueryPointer only reflects live motion while the cursor is over an
+// XWayland-backed window under Mutter, the same limitation `hotkey/`
+// already works around for the keyboard (see `evdev.rs`, which itself uses
+// `crossplatform` internally to seed and resync). Everything else (macOS,
+// Windows) uses the portable `crossplatform` backend directly. The three
+// cfgs are mutually exclusive and exhaustive, so exactly one Active is
+// always defined.
 #[cfg(all(target_os = "linux", feature = "hyprland"))]
 type Active = hyprland::Backend;
-#[cfg(not(all(target_os = "linux", feature = "hyprland")))]
+#[cfg(all(target_os = "linux", not(feature = "hyprland")))]
+type Active = evdev::Backend;
+#[cfg(not(target_os = "linux"))]
 type Active = crossplatform::Backend;
 
 /// Returns the cursor's absolute screen position as `(x, y)` in pixels.
@@ -36,4 +46,11 @@ type Active = crossplatform::Backend;
 /// ```
 pub fn mouse_movement() -> Result<(i64, i64), Box<dyn std::error::Error + Send + Sync>> {
     Active::mouse_movement()
+}
+
+/// Tell the active backend the cursor was just synthetically moved to
+/// `(x, y)` (e.g. a ydotool relative-move click), so an integrating backend
+/// can stay in sync. No-op on backends that query live state directly.
+pub fn report_synthetic_move(x: i64, y: i64) {
+    Active::report_synthetic_move(x, y);
 }

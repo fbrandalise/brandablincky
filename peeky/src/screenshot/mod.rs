@@ -19,6 +19,8 @@ mod crossplatform;
 mod hyprland;
 #[cfg(target_os = "linux")]
 mod x11;
+#[cfg(target_os = "linux")]
+mod portal;
 
 // Linux uses the native grim backend; everything else (and Linux under the
 // no-default-features build) uses the portable xcap backend. The two
